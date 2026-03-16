@@ -66,7 +66,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
-function getStageMultiplier(stage: number): number {
+export function getStageMultiplier(stage: number): number {
   const clamped = clamp(stage, -6, 6)
   return STAGE_MULTIPLIERS[clamped] ?? 1.0
 }

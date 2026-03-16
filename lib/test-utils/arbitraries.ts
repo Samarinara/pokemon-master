@@ -11,6 +11,9 @@ import type {
   BirdInstance,
   OrderSet,
   BattleState,
+  ResolvedAction,
+  Player,
+  RNG,
 } from "../types"
 
 export function arbitraryColour(): fc.Arbitrary<Colour> {
@@ -144,6 +147,128 @@ export function arbitraryBattleState(): fc.Arbitrary<BattleState> {
     winner: fc.constant(null),
     createdAt: fc.integer({ min: 0 }),
   })
+}
+
+// ── arbPrePostStatePair ────────────────────────────────────────────────────
+//
+// Generates a consistent (preState, postState) pair for round-trip testing.
+// Uses 100% accuracy moves so that applySingleAction (which uses roll=0)
+// produces the same outcomes as resolveTurn.
+
+import { buildResolutionQueue, resolveTurn } from "../engine"
+
+function arbitraryMoveWith100Acc(): fc.Arbitrary<Move> {
+  return fc.record({
+    id: fc.string({ minLength: 4, maxLength: 8 }),
+    name: fc.string({ minLength: 1, maxLength: 10 }),
+    colour: arbitraryColour(),
+    height: arbitraryHeight(),
+    powerTier: arbitraryPowerTier(),
+    accuracy: fc.constant(100),
+    priority: fc.integer({ min: -1, max: 1 }),
+    flags: fc.record({
+      reversalLegal: fc.boolean(),
+      switchAttackLegal: fc.boolean(),
+      contact: fc.boolean(),
+      special: fc.boolean(),
+    }),
+  })
+}
+
+function arbitraryBirdWith100AccMoves(): fc.Arbitrary<Bird> {
+  return fc.record({
+    id: fc.string({ minLength: 4, maxLength: 8 }),
+    name: fc.string({ minLength: 1, maxLength: 10 }),
+    colour: arbitraryColour(),
+    baseStats: arbitraryStats(),
+    moves: fc.array(arbitraryMoveWith100Acc(), { minLength: 4, maxLength: 4 }),
+  })
+}
+
+function arbitraryLiveBirdInstance(): fc.Arbitrary<BirdInstance> {
+  return arbitraryBirdWith100AccMoves().chain((bird) =>
+    fc.record({
+      bird: fc.constant(bird),
+      currentHp: fc.integer({ min: 10, max: 220 }),
+      currentSpirit: fc.integer({ min: 0, max: 140 }),
+      statStages: fc.record({
+        str: fc.integer({ min: -6, max: 6 }),
+        guts: fc.integer({ min: -6, max: 6 }),
+        spd: fc.integer({ min: -6, max: 6 }),
+        spirit: fc.integer({ min: -6, max: 6 }),
+      }),
+      status: fc.option(arbitraryStatusCondition(), { nil: null }),
+      skipNextAction: fc.constant(false),
+      fainted: fc.constant(false),
+    })
+  )
+}
+
+// Seeded deterministic RNG (always returns 0) — matches roll=0 in applySingleAction
+function deterministicRng(): RNG {
+  return { next: () => 0, nextInt: () => 0 }
+}
+
+export function arbPrePostStatePair(): fc.Arbitrary<{ preState: BattleState; postState: BattleState }> {
+  const fieldArb = fc.record({
+    left: arbitraryLiveBirdInstance(),
+    right: arbitraryLiveBirdInstance(),
+    bench: arbitraryLiveBirdInstance(),
+  })
+
+  return fc
+    .record({
+      id: fc.string({ minLength: 4, maxLength: 8 }),
+      matchId: fc.string({ minLength: 4, maxLength: 8 }),
+      turn: fc.integer({ min: 1, max: 10 }),
+      p1Field: fieldArb,
+      p2Field: fieldArb,
+      createdAt: fc.integer({ min: 0 }),
+    })
+    .map(({ id, matchId, turn, p1Field, p2Field, createdAt }) => {
+      // Build order sets that reference actual move IDs from the birds
+      const p1Orders: OrderSet = {
+        left: { type: "attack", slot: "left", moveId: p1Field.left.bird.moves[0].id, targetSlot: "left" },
+        right: { type: "attack", slot: "right", moveId: p1Field.right.bird.moves[0].id, targetSlot: "right" },
+      }
+      const p2Orders: OrderSet = {
+        left: { type: "attack", slot: "left", moveId: p2Field.left.bird.moves[0].id, targetSlot: "left" },
+        right: { type: "attack", slot: "right", moveId: p2Field.right.bird.moves[0].id, targetSlot: "right" },
+      }
+
+      const baseState: BattleState = {
+        id,
+        matchId,
+        phase: "planning",
+        turn,
+        p1Field,
+        p2Field,
+        pendingOrders: { p1: p1Orders, p2: p2Orders },
+        resolutionQueue: [],
+        currentQueueIndex: 0,
+        reversalWindow: null,
+        battleLog: [],
+        winner: null,
+        createdAt,
+      }
+
+      // Build queue with deterministic RNG (tiebreakers all 0)
+      const rng = deterministicRng()
+      const queue = buildResolutionQueue(baseState, p1Orders, p2Orders, rng)
+
+      const preState: BattleState = {
+        ...baseState,
+        resolutionQueue: queue,
+        currentQueueIndex: 0,
+        phase: "planning",
+      }
+
+      // resolveTurn with same deterministic RNG (fresh instance)
+      const rng2 = deterministicRng()
+      const postState = resolveTurn(preState, p1Orders, p2Orders, rng2)
+
+      return { preState, postState }
+    })
 }
 
 // ── Matchmaking arbitraries ────────────────────────────────────────────────

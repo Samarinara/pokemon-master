@@ -7,6 +7,7 @@ import { PlanningScreen } from "../../../components/battle/PlanningScreen"
 import TimelineBar from "../../../components/battle/TimelineBar"
 import BattleLog from "../../../components/battle/BattleLog"
 import { MatchSummary } from "../../../components/battle/MatchSummary"
+import { ResolutionScreen } from "../../../components/battle/ResolutionScreen"
 
 interface BattleClientProps {
   initialState: BattleState
@@ -23,6 +24,10 @@ export default function BattleClient({
 }: BattleClientProps) {
   const [state, setState] = useState<BattleState>(initialState)
   const [match] = useState<MatchState | null>(initialMatch)
+  const [resolutionStates, setResolutionStates] = useState<{
+    pre: BattleState
+    post: BattleState
+  } | null>(null)
   const isNetplay = Boolean(sessionToken && myPlayer)
   const eventSourceRef = useRef<EventSource | null>(null)
 
@@ -38,7 +43,21 @@ export default function BattleClient({
       try {
         const data = JSON.parse(event.data)
         if (data.type === "battle_state_updated") {
-          setState(data.state as BattleState)
+          const newState = data.state as BattleState
+          setState((prevState) => {
+            const turnResolved =
+              newState.turn > prevState.turn || newState.phase === "battle_ended"
+            if (turnResolved && newState.resolutionQueue.length > 0) {
+              const preStateForAnimation: BattleState = {
+                ...prevState,
+                resolutionQueue: newState.resolutionQueue,
+                pendingOrders: newState.pendingOrders,
+              }
+              setResolutionStates({ pre: preStateForAnimation, post: newState })
+              return prevState // keep current state until animation completes
+            }
+            return newState
+          })
         }
       } catch {
         // ignore parse errors
@@ -63,6 +82,20 @@ export default function BattleClient({
     !isNetplay ||
     phase === "planning" ||
     (phase === "awaiting_p2_orders" && myPlayer === "p2")
+
+  // Show resolution animation when transitioning to end_of_turn or battle_ended
+  if (resolutionStates) {
+    return (
+      <ResolutionScreen
+        preState={resolutionStates.pre}
+        postState={resolutionStates.post}
+        onComplete={() => {
+          setState(resolutionStates.post)
+          setResolutionStates(null)
+        }}
+      />
+    )
+  }
 
   if (phase === "placement_p1" || phase === "placement_p2") {
     const player = phase === "placement_p1" ? "p1" : "p2"
@@ -102,7 +135,27 @@ export default function BattleClient({
           battleId={state.id}
           player={isNetplay ? myPlayer! : "p1"}
           state={state}
-          onSubmit={setState}
+          onSubmit={(newState) => {
+            // A turn resolved when the turn counter advanced or the battle ended.
+            // (The server runs applyEndOfTurn before returning, so phase is already
+            // "planning" or "battle_ended" — never "end_of_turn" — by the time we
+            // receive the response.)
+            const turnResolved =
+              newState.turn > state.turn || newState.phase === "battle_ended"
+            if (turnResolved) {
+              // buildSnapshots needs a preState with the populated resolutionQueue
+              // (which lives on newState after the server resolves the turn).
+              // Graft the queue + pre-EOT battleLog onto the planning-phase field values.
+              const preStateForAnimation: BattleState = {
+                ...state,
+                resolutionQueue: newState.resolutionQueue,
+                pendingOrders: newState.pendingOrders,
+              }
+              setResolutionStates({ pre: preStateForAnimation, post: newState })
+            } else {
+              setState(newState)
+            }
+          }}
           sessionToken={sessionToken ?? ""}
         />
         {state.turn > 0 && (
