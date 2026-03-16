@@ -145,3 +145,60 @@ export function arbitraryBattleState(): fc.Arbitrary<BattleState> {
     createdAt: fc.integer({ min: 0 }),
   })
 }
+
+// ── Matchmaking arbitraries ────────────────────────────────────────────────
+
+import type { Session } from "../matchmaking/types"
+
+export function arbitraryDisplayName(): fc.Arbitrary<string> {
+  return fc.stringMatching(/^[a-zA-Z0-9]{1,24}$/)
+}
+
+export function arbitraryJoinCode(): fc.Arbitrary<string> {
+  return fc.stringMatching(/^[A-Z0-9]{1,16}$/)
+}
+
+export function arbitraryInvalidDisplayName(): fc.Arbitrary<string> {
+  return fc.oneof(
+    fc.constant(""),
+    fc.stringMatching(/^[a-zA-Z0-9]{25,50}$/)
+  )
+}
+
+export function arbitraryInvalidJoinCode(): fc.Arbitrary<string> {
+  return fc.oneof(
+    fc.constant(""),
+    fc.stringMatching(/^[A-Z0-9]{17,32}$/),
+    fc.stringMatching(/^[A-Z0-9]{1,8}[^A-Z0-9]+[A-Z0-9]{0,8}$/)
+  )
+}
+
+export function arbitrarySession(): fc.Arbitrary<Session> {
+  const lobbyStates = ["waiting", "pending_acceptance", "in_progress", "complete"] as const
+
+  return fc.constantFrom(...lobbyStates).chain((lobbyState) => {
+    const now = Date.now()
+
+    const sessionPlayerArb = arbitraryDisplayName().map((displayName) => ({
+      displayName,
+      token: crypto.randomUUID(),
+      player: null,
+      connectedAt: 0,
+    }))
+
+    return fc.record({
+      joinCode: arbitraryJoinCode(),
+      lobbyState: fc.constant(lobbyState),
+      host: sessionPlayerArb,
+      joiner: lobbyState === "waiting"
+        ? fc.constant(null)
+        : sessionPlayerArb,
+      battleId: lobbyState === "in_progress" ? fc.uuid() : fc.constant(null),
+      createdAt: fc.constant(now),
+      updatedAt: fc.constant(now),
+      acceptanceDeadline: lobbyState === "pending_acceptance"
+        ? fc.constant(now + 30000)
+        : fc.constant(null),
+    })
+  })
+}

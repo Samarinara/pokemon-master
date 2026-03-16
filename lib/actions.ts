@@ -23,6 +23,8 @@ import {
 import { resolveTurn, applyEndOfTurn } from "./engine"
 import { generateRoster } from "./teamgen"
 import { createRng } from "./rng"
+import { loadSessionByBattleId } from "./matchmaking/sessionStore"
+import { publish } from "./matchmaking/broadcaster"
 
 function makeBirdInstance(bird: Bird): BirdInstance {
   return {
@@ -130,16 +132,37 @@ export async function confirmPlacement(
 
   await saveBattle(updated)
   saveDb()
+  
+  publish(battleId, { type: "battle_state_updated", state: updated })
+  
   return updated
 }
 
 export async function submitOrders(
   battleId: string,
   player: "p1" | "p2",
-  orders: OrderSet
-): Promise<BattleState> {
+  orders: OrderSet,
+  sessionToken?: string
+): Promise<BattleState | { error: "INVALID_TOKEN" } | { error: "TURN_ALREADY_RESOLVED" }> {
   const state = await loadBattle(battleId)
   if (!state) throw new Error(`Battle ${battleId} not found`)
+
+  // Session token validation (only when a session exists for this battle)
+  if (sessionToken !== undefined) {
+    const session = await loadSessionByBattleId(battleId)
+    if (session) {
+      const expectedToken =
+        player === "p1" ? session.host.token : session.joiner?.token
+      if (!expectedToken || sessionToken !== expectedToken) {
+        return { error: "INVALID_TOKEN" }
+      }
+    }
+  }
+
+  // Reject orders that arrive after resolution has begun
+  if (state.phase === "resolving") {
+    return { error: "TURN_ALREADY_RESOLVED" }
+  }
 
   await savePendingOrders(battleId, player, orders)
 
@@ -155,6 +178,10 @@ export async function submitOrders(
     const finalState: BattleState = { ...afterEot, pendingOrders: {} }
     await saveBattle(finalState)
     saveDb()
+
+    // Publish updated battle state to SSE subscribers
+    publish(battleId, { type: "battle_state_updated", state: finalState })
+
     return finalState
   }
 

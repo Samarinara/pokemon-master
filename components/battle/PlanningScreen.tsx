@@ -12,6 +12,7 @@ interface PlanningScreenProps {
   player: "p1" | "p2"
   state: BattleState
   onSubmit: (newState: BattleState) => void
+  sessionToken?: string
 }
 
 type OrderType = "attack" | "blockHigh" | "blockLow" | "switch"
@@ -173,7 +174,7 @@ function buildOrder(slot: "left" | "right", selection: SlotSelection): Order | n
   return { type: "switch", slot }
 }
 
-export function PlanningScreen({ battleId, player, state, onSubmit }: PlanningScreenProps) {
+export function PlanningScreen({ battleId, player, state, onSubmit, sessionToken }: PlanningScreenProps) {
   const myField = player === "p1" ? state.p1Field : state.p2Field
   const opponentField = player === "p1" ? state.p2Field : state.p1Field
 
@@ -200,8 +201,13 @@ export function PlanningScreen({ battleId, player, state, onSubmit }: PlanningSc
     setLocked(true)
     setLoading(true)
     try {
-      const newState = await submitOrders(battleId, player, orders)
-      onSubmit(newState)
+      const result = await submitOrders(battleId, player, orders, sessionToken ?? "")
+      if ("error" in result) {
+        // In netplay mode, token errors or already-resolved turns are handled gracefully
+        setLocked(false)
+        return
+      }
+      onSubmit(result)
     } finally {
       setLoading(false)
     }

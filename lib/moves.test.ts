@@ -55,15 +55,15 @@ const arbitraryMove = (): fc.Arbitrary<Move> =>
       const move: Move = {
         id: m.id,
         name: m.name,
-        colour: m.colour,
-        height: m.height,
-        powerTier: m.powerTier,
+        colour: m.colour as any,
+        height: m.height as any,
+        powerTier: m.powerTier as any,
         accuracy: m.accuracy,
         priority: m.priority,
         flags: m.flags,
       }
-      if (m.statStage !== undefined) move.statStage = m.statStage
-      if (m.status !== undefined) move.status = m.status
+      if (m.statStage !== undefined) move.statStage = m.statStage as any
+      if (m.status !== undefined) move.status = m.status as any
       return move
     })
 

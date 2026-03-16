@@ -5,10 +5,10 @@ import type { BattleState, OrderSet, MatchState, Player } from "./types"
 
 const DB_PATH = path.join(process.cwd(), "data", "battles.db")
 
-let db: Database | null = null
+const globalDb = globalThis as unknown as { __sqljs_db?: Database }
 
 async function initDb(): Promise<Database> {
-  if (db) return db
+  if (globalDb.__sqljs_db) return globalDb.__sqljs_db
 
   const SQL = await initSqlJs({
     locateFile: (file: string) =>
@@ -22,10 +22,12 @@ async function initDb(): Promise<Database> {
 
   if (fs.existsSync(DB_PATH)) {
     const buffer = fs.readFileSync(DB_PATH)
-    db = new SQL.Database(buffer)
+    globalDb.__sqljs_db = new SQL.Database(buffer)
   } else {
-    db = new SQL.Database()
+    globalDb.__sqljs_db = new SQL.Database()
   }
+
+  const db = globalDb.__sqljs_db
 
   // Create tables if they don't exist
   db.run(`
@@ -58,6 +60,21 @@ async function initDb(): Promise<Database> {
     )
   `)
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      join_code           TEXT PRIMARY KEY,
+      lobby_state         TEXT NOT NULL CHECK(lobby_state IN ('waiting','pending_acceptance','in_progress','complete')),
+      host_name           TEXT NOT NULL,
+      host_token          TEXT NOT NULL,
+      joiner_name         TEXT,
+      joiner_token        TEXT,
+      battle_id           TEXT,
+      acceptance_deadline INTEGER,
+      created_at          INTEGER NOT NULL,
+      updated_at          INTEGER NOT NULL
+    )
+  `)
+
   // Migrate: add match_id column to battles if missing
   try {
     db.run("ALTER TABLE battles ADD COLUMN match_id TEXT")
@@ -68,7 +85,12 @@ async function initDb(): Promise<Database> {
   return db
 }
 
+export async function getDb() {
+  return initDb()
+}
+
 export function saveDb(): void {
+  const db = globalDb.__sqljs_db
   if (!db) return
   const data = db.export()
   const buffer = Buffer.from(data)
