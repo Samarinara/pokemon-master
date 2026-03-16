@@ -1,0 +1,2 @@
+autoInstallPeers: true
+onlyBuiltDependencies: [ "better-sqlite3" ]
