@@ -63,10 +63,35 @@ export async function createOrJoinSession(
   }
 
   // Session exists
-  const { lobbyState } = existing
+  const { lobbyState, updatedAt } = existing
+  const isStale = Date.now() - updatedAt > 60 * 60 * 1000 // 1 hour
 
-  if (lobbyState === "in_progress" || lobbyState === "complete" || lobbyState === "pending_acceptance") {
+  if (!isStale && (lobbyState === "in_progress" || lobbyState === "complete" || lobbyState === "pending_acceptance")) {
     return { status: "in_progress" }
+  }
+
+  if (isStale) {
+    // Overwrite the stale session
+    await deleteSession(normCode)
+    const hostToken = crypto.randomUUID()
+    const now = Date.now()
+    const session: Session = {
+      joinCode: normCode,
+      lobbyState: "waiting",
+      host: {
+        displayName,
+        token: hostToken,
+        player: null,
+        connectedAt: now,
+      },
+      joiner: null,
+      battleId: null,
+      createdAt: now,
+      updatedAt: now,
+      acceptanceDeadline: null,
+    }
+    await saveSession(session)
+    return { status: "created", session, token: hostToken }
   }
 
   // lobbyState === "waiting" — register joiner
@@ -208,10 +233,19 @@ export async function disconnectFromSession(
 ): Promise<void> {
   const normCode = normaliseJoinCode(joinCode)
   const session = await loadSession(normCode)
+  
   if (!session) return
 
   if (session.host.token === token) {
-    // Host disconnects — delete session, notify joiner if present
+    if (session.lobbyState === "in_progress" || session.lobbyState === "pending_acceptance") {
+      // Do not delete the session yet. 
+      // If it's pending_acceptance, the Host is looking at AcceptancePrompt.
+      // If it's in_progress, the battle is starting and Joiner is polling it.
+      // The session will be deleted by the Joiner when they leave the lobby stream.
+      return
+    }
+
+    // Host disconnects while waiting — delete session, notify joiner if present
     if (session.joiner) {
       safePublish(normCode, { type: "session_expired" })
     }

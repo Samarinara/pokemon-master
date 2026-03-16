@@ -1,5 +1,5 @@
-
 import { loadSession } from "@/lib/matchmaking/sessionStore"
+import { disconnectFromSession } from "@/lib/matchmaking/actions"
 
 export async function GET(
   request: Request,
@@ -86,6 +86,10 @@ export async function GET(
         clearInterval(heartbeat)
         clearInterval(pollTimer)
         try { controller.close() } catch { /* already closed */ }
+        
+        // When a player closes the tab or disconnects, clean up the session
+        // so that connection codes can be reused.
+        disconnectFromSession(code, token).catch(() => { /* ignore */ })
       })
     },
     cancel() {
